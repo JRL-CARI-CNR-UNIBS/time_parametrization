@@ -1,0 +1,23 @@
+apply_time_parametrization_server:
+  ros__parameters:
+    action_name: apply_time_parametrization
+    planning_service: /plan_kinematic_path
+    planning_service_wait_sec: 2.0
+    robot_description_param: robot_description
+
+    group_configs_yaml: |
+      - group_name: "arm1"
+        resample_dt: 0.001
+        path_tolerance: 0.001
+        min_angle_change: 0.001
+        # enforced_joint_limits:
+        #   - joint_name: "joint_1"
+        #     has_velocity_limits: true
+        #     max_velocity: 1.0
+        #     has_acceleration_limits: true
+        #     max_acceleration: 2.0
+
+      - group_name: "arm2"
+        resample_dt: 0.002
+        path_tolerance: 0.002
+        min_angle_change: 0.001
