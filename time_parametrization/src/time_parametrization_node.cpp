@@ -17,10 +17,22 @@
 #include "moveit_msgs/msg/motion_plan_response.hpp"
 #include "moveit_msgs/srv/get_motion_plan.hpp"
 
+
+// if Jazzy or newer, load hpp. If humble or older, load h. check version
+#if __has_include(<moveit/robot_model_loader/robot_model_loader.hpp>)
 #include "moveit/robot_model_loader/robot_model_loader.hpp"
 #include "moveit/robot_state/conversions.hpp"
 #include "moveit/robot_trajectory/robot_trajectory.hpp"
 #include "moveit/trajectory_processing/time_optimal_trajectory_generation.hpp"
+#elif __has_include(<moveit/robot_model_loader/robot_model_loader.h>)
+#include "moveit/robot_model_loader/robot_model_loader.h"
+#include "moveit/robot_state/conversions.h"
+#include "moveit/robot_trajectory/robot_trajectory.h"
+#include "moveit/trajectory_processing/time_optimal_trajectory_generation.h"
+#else
+  #error "MoveIt MoveGroupInterface header not found (.hpp nor .h). Check your MoveIt install."
+#endif
+
 
 #include <yaml-cpp/yaml.h>
 
