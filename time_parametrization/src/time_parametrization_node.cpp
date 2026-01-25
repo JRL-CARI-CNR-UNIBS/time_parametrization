@@ -24,6 +24,7 @@
 #include "moveit/robot_state/conversions.hpp"
 #include "moveit/robot_trajectory/robot_trajectory.hpp"
 #include "moveit/trajectory_processing/time_optimal_trajectory_generation.hpp"
+#define MOVEIT_ROBOT_MODEL_LOADER_HPP_AVAILABLE
 #elif __has_include(<moveit/robot_model_loader/robot_model_loader.h>)
 #include "moveit/robot_model_loader/robot_model_loader.h"
 #include "moveit/robot_state/conversions.h"
@@ -467,7 +468,11 @@ private:
       bool ok = false;
       if (group_entry.has_enforced_joint_limits)
       {
+        #ifdef MOVEIT_ROBOT_MODEL_LOADER_HPP_AVAILABLE
         ok = group_entry.totg->computeTimeStamps(robot_traj, group_entry.enforced_joint_limits, vel_scale, acc_scale);
+        #else
+        ok = group_entry.totg->computeTimeStamps(robot_traj, vel_scale, acc_scale);
+        #endif
       } else
       {
         ok = group_entry.totg->computeTimeStamps(robot_traj, vel_scale, acc_scale);
