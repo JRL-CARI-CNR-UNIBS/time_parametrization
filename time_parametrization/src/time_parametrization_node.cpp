@@ -13,27 +13,23 @@
 
 #include "moveit_msgs/msg/joint_limits.hpp"
 #include "moveit_msgs/msg/move_it_error_codes.hpp"
-#include "moveit_msgs/msg/motion_plan_request.hpp"
 #include "moveit_msgs/msg/motion_plan_response.hpp"
-#include "moveit_msgs/srv/get_motion_plan.hpp"
 
-
-// if Jazzy or newer, load hpp. If humble or older, load h. check version
+// If Jazzy or newer, load .hpp. If humble or older, load .h
 #if __has_include(<moveit/robot_model_loader/robot_model_loader.hpp>)
-#include "moveit/robot_model_loader/robot_model_loader.hpp"
-#include "moveit/robot_state/conversions.hpp"
-#include "moveit/robot_trajectory/robot_trajectory.hpp"
-#include "moveit/trajectory_processing/time_optimal_trajectory_generation.hpp"
-#define MOVEIT_ROBOT_MODEL_LOADER_HPP_AVAILABLE
+  #include "moveit/robot_model_loader/robot_model_loader.hpp"
+  #include "moveit/robot_state/conversions.hpp"
+  #include "moveit/robot_trajectory/robot_trajectory.hpp"
+  #include "moveit/trajectory_processing/time_optimal_trajectory_generation.hpp"
+  #define MOVEIT_ROBOT_MODEL_LOADER_HPP_AVAILABLE
 #elif __has_include(<moveit/robot_model_loader/robot_model_loader.h>)
-#include "moveit/robot_model_loader/robot_model_loader.h"
-#include "moveit/robot_state/conversions.h"
-#include "moveit/robot_trajectory/robot_trajectory.h"
-#include "moveit/trajectory_processing/time_optimal_trajectory_generation.h"
+  #include "moveit/robot_model_loader/robot_model_loader.h"
+  #include "moveit/robot_state/conversions.h"
+  #include "moveit/robot_trajectory/robot_trajectory.h"
+  #include "moveit/trajectory_processing/time_optimal_trajectory_generation.h"
 #else
-  #error "MoveIt MoveGroupInterface header not found (.hpp nor .h). Check your MoveIt install."
+  #error "MoveIt robot_model_loader header not found (.hpp nor .h). Check your MoveIt install."
 #endif
-
 
 #include <yaml-cpp/yaml.h>
 
@@ -41,102 +37,60 @@
 
 namespace
 {
-  /**
-   * @brief Ensure provided scaling factor is in the expected range.
-   *
-   * MoveIt historically expects a scaling factor in (0,1]. Treat any value
-   * <= 0 or > 1 as unspecified and return 1.0.
-   *
-   * @param v requested scaling factor
-   * @return sanitized scaling factor in (0,1]
-   */
-  double sanitizeScalingFactor(double v)
-  {
-    // MoveIt expects [0,1]. Treat <=0 as "unspecified" -> 1.0.
-    if (!(v > 0.0 && v <= 1.0))
-      return 1.0;
-    return v;
-  }
+double sanitizeScalingFactor(double v)
+{
+  // Allowed values are in (0,1]. Treat anything else as "unspecified" => 1.0.
+  if (!(v > 0.0 && v <= 1.0))
+    return 1.0;
+  return v;
+}
 
-  /**
-   * @brief Helper to construct MoveIt error message container.
-   * @param code numeric MoveIt error code
-   * @return moveit_msgs::msg::MoveItErrorCodes with .val set
-   */
-  moveit_msgs::msg::MoveItErrorCodes makeError(int32_t code)
-  {
-    moveit_msgs::msg::MoveItErrorCodes e;
-    e.val = code;
-    return e;
-  }
+moveit_msgs::msg::MoveItErrorCodes makeError(int32_t code)
+{
+  moveit_msgs::msg::MoveItErrorCodes e;
+  e.val = code;
+  return e;
+}
 
-  /**
-   * @brief Convert a YAML node into a string (emitter output).
-   * @param n YAML node to stringify
-   * @return serialized YAML text
-   */
-  std::string yamlNodeToString(const YAML::Node &n)
-  {
-    YAML::Emitter out;
-    out << n;
-    return std::string(out.c_str());
-  }
+// Minimal YAML -> JointLimits parser
+moveit_msgs::msg::JointLimits parseJointLimits(const YAML::Node &n)
+{
+  moveit_msgs::msg::JointLimits jl;
 
-  /**
-   * @brief Parse a YAML node describing joint limits into the ROS message type.
-   *
-   * This is a minimal parser that expects at least the key `joint_name` and
-   * optionally the usual JointLimits fields. Throws std::runtime_error on
-   * malformed input.
-   */
-  moveit_msgs::msg::JointLimits parseJointLimits(const YAML::Node &n)
-  {
-    moveit_msgs::msg::JointLimits jl;
+  if (!n["joint_name"])
+    throw std::runtime_error("JointLimits entry missing required key 'joint_name'");
+  jl.joint_name = n["joint_name"].as<std::string>();
 
-    if (!n["joint_name"])
-      throw std::runtime_error("JointLimits entry missing required key 'joint_name'");
-    jl.joint_name = n["joint_name"].as<std::string>();
+  auto getBool = [&](const char *k, bool def) -> bool { return n[k] ? n[k].as<bool>() : def; };
+  auto getDouble = [&](const char *k, double def) -> double { return n[k] ? n[k].as<double>() : def; };
 
-    auto getBool = [&](const char *k, bool def) -> bool
-    {
-      return n[k] ? n[k].as<bool>() : def;
-    };
-    auto getDouble = [&](const char *k, double def) -> double
-    {
-      return n[k] ? n[k].as<double>() : def;
-    };
+  jl.has_position_limits = getBool("has_position_limits", false);
+  jl.min_position = getDouble("min_position", 0.0);
+  jl.max_position = getDouble("max_position", 0.0);
 
-    // Position limits
-    jl.has_position_limits = getBool("has_position_limits", false);
-    jl.min_position = getDouble("min_position", 0.0);
-    jl.max_position = getDouble("max_position", 0.0);
+  jl.has_velocity_limits = getBool("has_velocity_limits", false);
+  jl.max_velocity = getDouble("max_velocity", 0.0);
 
-    // Velocity limits
-    jl.has_velocity_limits = getBool("has_velocity_limits", false);
-    jl.max_velocity = getDouble("max_velocity", 0.0);
+  jl.has_acceleration_limits = getBool("has_acceleration_limits", false);
+  jl.max_acceleration = getDouble("max_acceleration", 0.0);
 
-    // Acceleration limits
-    jl.has_acceleration_limits = getBool("has_acceleration_limits", false);
-    jl.max_acceleration = getDouble("max_acceleration", 0.0);
+  jl.has_jerk_limits = getBool("has_jerk_limits", false);
+  jl.max_jerk = getDouble("max_jerk", 0.0);
 
-    // Jerk limits (present in Jazzy JointLimits.msg)
-    jl.has_jerk_limits = getBool("has_jerk_limits", false);
-    jl.max_jerk = getDouble("max_jerk", 0.0);
+  return jl;
+}
 
-    return jl;
-  }
 } // namespace
 
 /**
- * @brief ROS2 action server node that applies time parametrization (TOTG)
- *        to planned joint trajectories.
+ * ApplyTimeParametrizationServer
  *
- * The node accepts an ApplyTimeParametrization action goal which contains a
- * MotionPlanRequest. It forwards that request to a planning service (e.g.
- * MoveIt's /plan_kinematic_path), receives a RobotTrajectory and then
- * computes time stamps using TimeOptimalTrajectoryGeneration. Group-specific
- * configuration (resampling dt, tolerances, and optional enforced joint
- * limits) is provided via a YAML parameter.
+ * Action goal contains:
+ *   - moveit_msgs/MotionPlanResponse unparametrized_motion_plan_response
+ *   - scaling factors
+ *   - optional cartesian speed limiting fields (NOT implemented here)
+ *
+ * The server retimes the input trajectory with MoveIt TOTG and returns a new MotionPlanResponse.
  */
 class ApplyTimeParametrizationServer : public rclcpp::Node
 {
@@ -144,74 +98,66 @@ public:
   using ActionT = time_parametrization_msgs::action::ApplyTimeParametrization;
   using GoalHandleT = rclcpp_action::ServerGoalHandle<ActionT>;
 
-  /**
-   * @brief Construct the node and declare parameters.
-   * @param options NodeOptions forwarded to rclcpp::Node
-   */
   ApplyTimeParametrizationServer(const rclcpp::NodeOptions &options = rclcpp::NodeOptions())
     : rclcpp::Node("apply_time_parametrization_server", options)
   {
     declare_parameter<std::string>("action_name", "apply_time_parametrization");
-    declare_parameter<std::string>("planning_service", "/plan_kinematic_path");
-    declare_parameter<double>("planning_service_wait_sec", 2.0);
-    // Robot model loading
     declare_parameter<std::string>("robot_description_param", "robot_description");
 
-    // Group config input: either a file or an inline YAML string.
-    // Because ROS 2 parameters do not support "list of maps" types, we treat it as YAML text.
+    // Inline YAML sequence string (because ROS2 params can't be list-of-maps)
     declare_parameter<std::string>("group_configs_yaml", "[]");
+
+    // Optional: if set non-empty, the node uses this group (skips inference).
+    declare_parameter<std::string>("default_group_name", "");
   }
 
   bool init()
   {
     RCLCPP_INFO(get_logger(), "Initializing ApplyTimeParametrizationServer");
 
-
-    RCLCPP_INFO(get_logger(), "Loading RobotModel...");
+    // Load RobotModel
     const auto robot_description_param = get_parameter("robot_description_param").as_string();
-    RCLCPP_INFO(get_logger(), "Using robot description parameter: %s", robot_description_param.c_str());
+    RCLCPP_INFO(get_logger(), "Loading RobotModel from parameter '%s'", robot_description_param.c_str());
+
     robot_model_loader_ =
-        std::make_shared<robot_model_loader::RobotModelLoader>(shared_from_this(), robot_description_param);
+      std::make_shared<robot_model_loader::RobotModelLoader>(shared_from_this(), robot_description_param);
+
     if (!robot_model_loader_)
-    {
-      throw std::runtime_error("Failed to create RobotModelLoader with parameter '" + robot_description_param + "'");
-    }
-    RCLCPP_INFO(get_logger(), "RobotModelLoader created");
+      throw std::runtime_error("Failed to create RobotModelLoader");
+
     robot_model_ = robot_model_loader_->getModel();
     if (!robot_model_)
-    {
       throw std::runtime_error("Failed to load RobotModel from parameter '" + robot_description_param + "'");
-    }
+
     RCLCPP_INFO(get_logger(), "Loaded RobotModel '%s'", robot_model_->getName().c_str());
 
-    // check if joints has accelerations, if not add default values (5*velocities)
+    // Ensure accelerations exist; set defaults if missing (5 * velocity)
     for (auto &joint_model : robot_model_->getJointModels())
     {
       const auto &joint_name = joint_model->getName();
 
-      // skip if fixed joint
       if (joint_model->getType() == moveit::core::JointModel::FIXED)
         continue;
-      // get const Variable bounds
+
       const moveit::core::VariableBounds &var_bounds = joint_model->getVariableBounds(joint_name);
-      // copy to mutable bound
-      moveit::core::VariableBounds mutable_var_bounds = var_bounds;
-      if (!mutable_var_bounds.acceleration_bounded_)
+      moveit::core::VariableBounds mutable_bounds = var_bounds;
+
+      if (!mutable_bounds.acceleration_bounded_)
       {
         RCLCPP_WARN(get_logger(),
-                    "Joint '%s' has no acceleration limits defined; adding default limits (5 * velocity limits)",
+                    "Joint '%s' has no acceleration limits; adding default (5*velocity)",
                     joint_name.c_str());
-        if (mutable_var_bounds.velocity_bounded_)
+        if (mutable_bounds.velocity_bounded_)
         {
-          mutable_var_bounds.max_acceleration_ = 5.0 * mutable_var_bounds.max_velocity_;
-          mutable_var_bounds.min_acceleration_ = -5.0 * mutable_var_bounds.max_velocity_;
-          mutable_var_bounds.acceleration_bounded_ = true;
-          joint_model->setVariableBounds(joint_name, mutable_var_bounds);
+          mutable_bounds.max_acceleration_ = 5.0 * mutable_bounds.max_velocity_;
+          mutable_bounds.min_acceleration_ = -5.0 * mutable_bounds.max_velocity_;
+          mutable_bounds.acceleration_bounded_ = true;
+          joint_model->setVariableBounds(joint_name, mutable_bounds);
         }
         else
         {
           RCLCPP_WARN(get_logger(),
-                      "Joint '%s' has no velocity limits defined; cannot set default acceleration limits",
+                      "Joint '%s' has no velocity limits; cannot set default acceleration limits",
                       joint_name.c_str());
         }
       }
@@ -219,13 +165,10 @@ public:
 
     loadGroupConfigs();
 
-    // Planning service client (MoveIt move_group typically provides /plan_kinematic_path)
-    const auto planning_service = get_parameter("planning_service").as_string();
-    plan_client_ = create_client<moveit_msgs::srv::GetMotionPlan>(planning_service);
-
     // Action server
     const auto action_name = get_parameter("action_name").as_string();
-    RCLCPP_INFO(get_logger(), "Creating ApplyTimeParametrization action server on '%s'", action_name.c_str());
+    RCLCPP_INFO(get_logger(), "Creating action server on '%s'", action_name.c_str());
+
     action_server_ = rclcpp_action::create_server<ActionT>(
       this,
       action_name,
@@ -254,52 +197,31 @@ private:
 
     const std::string yaml_text = get_parameter("group_configs_yaml").as_string();
     RCLCPP_INFO(get_logger(), "Parsing group configs YAML:\n%s", yaml_text.c_str());
-    YAML::Node root = YAML::Load(yaml_text);
 
+    YAML::Node root = YAML::Load(yaml_text);
     if (!root || !root.IsSequence())
       throw std::runtime_error("'group_configs_yaml' must be a YAML sequence string (starts with '-')");
 
-    const YAML::Node& group_list = root;
-
-    RCLCPP_INFO(get_logger(), "Loading group configs from inline YAML parameter 'group_configs_yaml'");
-
-    // const YAML::Node group_list = extractGroupConfigsNode(root, this->get_name());
-
-    if (!group_list || !group_list.IsSequence())
-    {
-      // Emit a concise hint about what we expected
-      throw std::runtime_error(
-        "Group configs must be either:\n"
-        "  - a top-level YAML sequence, OR\n"
-        "  - a YAML map containing key 'group_configs_yaml' with a sequence, OR\n"
-        "  - a ROS params YAML with '<node>: ros__parameters: group_configs_yaml: <sequence>'.");
-    }
-    if (group_list.size() == 0)
-    {
+    if (root.size() == 0)
       RCLCPP_WARN(get_logger(), "No group configs found in 'group_configs_yaml' parameter");
-    }
 
-
-    for (const auto &g: group_list)
+    for (const auto &g : root)
     {
       if (!g["group_name"])
         throw std::runtime_error("Group entry missing required key 'group_name'");
 
-      RCLCPP_INFO(get_logger(), "Loading config for group '%s'", g["group_name"].as<std::string>().c_str());
-
       GroupEntry entry;
       entry.group_name = g["group_name"].as<std::string>();
+      RCLCPP_INFO(get_logger(), "Loading config for group '%s'", entry.group_name.c_str());
 
       if (!robot_model_->hasJointModelGroup(entry.group_name))
       {
-        RCLCPP_WARN(get_logger(), "Configured group '%s' not found in RobotModel; skipping",
-                    entry.group_name.c_str());
+        RCLCPP_WARN(get_logger(), "Group '%s' not found in RobotModel; skipping", entry.group_name.c_str());
         continue;
       }
 
-
-      const double path_tolerance = g["path_tolerance"] ? g["path_tolerance"].as<double>() : 0.1;
-      const double resample_dt = g["resample_dt"] ? g["resample_dt"].as<double>() : 0.1;
+      const double path_tolerance   = g["path_tolerance"]   ? g["path_tolerance"].as<double>()   : 0.1;
+      const double resample_dt      = g["resample_dt"]      ? g["resample_dt"].as<double>()      : 0.1;
       const double min_angle_change = g["min_angle_change"] ? g["min_angle_change"].as<double>() : 0.001;
 
       entry.totg = std::make_shared<trajectory_processing::TimeOptimalTrajectoryGeneration>(
@@ -313,10 +235,8 @@ private:
 
         entry.has_enforced_joint_limits = true;
         entry.enforced_joint_limits.reserve(jl.size());
-        for (const auto &jln: jl)
-        {
+        for (const auto &jln : jl)
           entry.enforced_joint_limits.push_back(parseJointLimits(jln));
-        }
       }
 
       groups_.emplace(entry.group_name, std::move(entry));
@@ -326,46 +246,137 @@ private:
       RCLCPP_WARN(get_logger(), "No valid group configs loaded; all goals will be rejected.");
   }
 
-  static YAML::Node extractGroupConfigsNode(const YAML::Node &root, const std::string &node_name)
+  // Build start state:
+  // - prefer goal.unparametrized_motion_plan_response.trajectory_start if populated
+  // - otherwise infer from first point of joint_trajectory
+  moveit::core::RobotState makeStartStateFromResponse(
+    const moveit_msgs::msg::MotionPlanResponse& resp,
+    const moveit_msgs::msg::RobotTrajectory& traj_msg) const
   {
-    // Case 1: root is already a sequence
-    if (root && root.IsSequence())
-      return root;
+    moveit::core::RobotState st(robot_model_);
+    st.setToDefaultValues();
 
-    if (!root || !root.IsMap())
-      return YAML::Node();
+    if (!resp.trajectory_start.joint_state.name.empty())
+    {
+      moveit::core::robotStateMsgToRobotState(resp.trajectory_start, st);
+      return st;
+    }
 
-    // Case 2: root has "group_configs_yaml: [ ... ]"
-    if (root["group_configs_yaml"])
-      return root["group_configs_yaml"];
+    const auto& jt = traj_msg.joint_trajectory;
+    if (jt.joint_names.empty() || jt.points.empty())
+    {
+      RCLCPP_WARN(get_logger(), "No trajectory_start and empty joint trajectory; using default RobotState");
+      return st;
+    }
 
-    // Case 3: ROS params file style:
-    // <node_name>:
-    //   ros__parameters:
-    //     group_configs_yaml: [ ... ]
-    if (root[node_name] && root[node_name]["ros__parameters"] && root[node_name]["ros__parameters"][
-          "group_configs_yaml"])
-      return root[node_name]["ros__parameters"]["group_configs_yaml"];
+    const auto& p0 = jt.points.front();
+    if (p0.positions.size() != jt.joint_names.size())
+    {
+      RCLCPP_WARN(get_logger(),
+                  "First point positions size (%zu) != joint_names size (%zu); using default RobotState",
+                  p0.positions.size(), jt.joint_names.size());
+      return st;
+    }
 
-    // Also support wildcard node key: "/**"
-    if (root["/**"] && root["/**"]["ros__parameters"] && root["/**"]["ros__parameters"]["group_configs_yaml"])
-      return root["/**"]["ros__parameters"]["group_configs_yaml"];
+    for (size_t i = 0; i < jt.joint_names.size(); ++i)
+    {
+      const std::string& joint_name = jt.joint_names[i];
 
-    return YAML::Node();
+      const auto* jm = robot_model_->getJointModel(joint_name);
+      if (!jm)
+        continue;
+
+      const auto& vars = jm->getVariableNames();
+      if (vars.size() != 1)
+        continue; // ignore multi-DOF joints in this fallback
+
+      st.setVariablePosition(vars[0], p0.positions[i]);
+    }
+
+    st.update();
+    return st;
   }
 
+  // Decide which MoveIt group to use:
+  // - if default_group_name param is non-empty => use it
+  // - else, if only one configured group => use it
+  // - else, pick the unique group whose variable names contain all trajectory joint_names
+  std::string chooseGroupName(const std::vector<std::string>& traj_joint_names) const
+  {
+    const std::string forced = get_parameter("default_group_name").as_string();
+    if (!forced.empty())
+      return forced;
 
-  rclcpp_action::GoalResponse handleGoal(const rclcpp_action::GoalUUID &,
+    if (groups_.empty())
+      throw std::runtime_error("No group configs loaded.");
+
+    if (groups_.size() == 1)
+      return groups_.begin()->first;
+
+    std::vector<std::string> matches;
+    matches.reserve(groups_.size());
+
+    for (const auto& kv : groups_)
+    {
+      const std::string& group_name = kv.first;
+      const auto* jmg = robot_model_->getJointModelGroup(group_name);
+      if (!jmg)
+        continue;
+
+      const auto& vars = jmg->getVariableNames();
+
+      bool ok = true;
+      for (const auto& jn : traj_joint_names)
+      {
+        if (std::find(vars.begin(), vars.end(), jn) == vars.end())
+        {
+          ok = false;
+          break;
+        }
+      }
+      if (ok)
+        matches.push_back(group_name);
+    }
+
+    if (matches.size() == 1)
+      return matches.front();
+
+    if (matches.empty())
+      throw std::runtime_error("Cannot infer group: no configured group matches trajectory joint names.");
+    throw std::runtime_error("Cannot infer group: multiple configured groups match trajectory joint names. "
+                             "Set parameter 'default_group_name'.");
+  }
+
+  rclcpp_action::GoalResponse handleGoal(const rclcpp_action::GoalUUID&,
                                          std::shared_ptr<const ActionT::Goal> goal)
   {
-    const std::string &group_name = goal->motion_plan_request.group_name;
+    const auto& resp = goal->unparametrized_motion_plan_response;
+    const auto& jt   = resp.trajectory.joint_trajectory;
 
-    std::lock_guard<std::mutex> lk(groups_mutex_);
-    if (groups_.find(group_name) == groups_.end())
+    if (jt.joint_names.empty() || jt.points.empty())
     {
-      RCLCPP_WARN(get_logger(), "Rejecting goal: group '%s' is not managed", group_name.c_str());
+      RCLCPP_WARN(get_logger(), "Rejecting goal: empty input joint_trajectory (joint_names or points).");
       return rclcpp_action::GoalResponse::REJECT;
     }
+
+    std::lock_guard<std::mutex> lk(groups_mutex_);
+    if (groups_.empty())
+    {
+      RCLCPP_WARN(get_logger(), "Rejecting goal: no group configs loaded.");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+
+    // Optional: early group selection check (reject fast if ambiguous)
+    try
+    {
+      (void)chooseGroupName(jt.joint_names);
+    }
+    catch (const std::exception& e)
+    {
+      RCLCPP_WARN(get_logger(), "Rejecting goal: %s", e.what());
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
   }
 
@@ -382,19 +393,15 @@ private:
   void execute(const std::shared_ptr<GoalHandleT> goal_handle)
   {
     auto feedback = std::make_shared<ActionT::Feedback>();
-    auto result = std::make_shared<ActionT::Result>();
+    auto result   = std::make_shared<ActionT::Result>();
 
     const auto goal = goal_handle->get_goal();
-    const std::string group_name = goal->motion_plan_request.group_name;
+    const auto& in_resp = goal->unparametrized_motion_plan_response;
 
-    GroupEntry group_entry;
-    {
-      std::lock_guard<std::mutex> lk(groups_mutex_);
-      group_entry = groups_.at(group_name);
-    }
+    // Start by copying input response to output (then overwrite trajectory + error_code)
+    result->motion_plan_response = in_resp;
 
-    // Feedback: start
-    feedback->status = "Planning request received";
+    feedback->status = "Goal received; validating input";
     feedback->progress = 0.05f;
     goal_handle->publish_feedback(feedback);
 
@@ -404,47 +411,61 @@ private:
       return;
     }
 
-    // Wait for planning service
-    const double wait_sec = get_parameter("planning_service_wait_sec").as_double();
-    if (!plan_client_->wait_for_service(std::chrono::duration<double>(wait_sec)))
+    const auto& in_traj = in_resp.trajectory;
+    const auto& jt = in_traj.joint_trajectory;
+
+    if (jt.joint_names.empty() || jt.points.empty())
     {
-      RCLCPP_ERROR(get_logger(), "Planning service not available within %.2f sec", wait_sec);
-      result->motion_plan_response.error_code = makeError(moveit_msgs::msg::MoveItErrorCodes::FAILURE);
+      RCLCPP_ERROR(get_logger(), "Input MotionPlanResponse has empty joint_trajectory.");
+      result->motion_plan_response.error_code =
+        makeError(moveit_msgs::msg::MoveItErrorCodes::INVALID_MOTION_PLAN);
       goal_handle->abort(result);
       return;
     }
 
-    // Call planning service
-    auto srv_req = std::make_shared<moveit_msgs::srv::GetMotionPlan::Request>();
-    srv_req->motion_plan_request = goal->motion_plan_request;
-
-    feedback->status = "Calling planning service";
-    feedback->progress = 0.15f;
-    goal_handle->publish_feedback(feedback);
-
-    auto future = plan_client_->async_send_request(srv_req);
-    // Wait in this worker thread; executor spinning elsewhere will fulfill the future.
-    if (future.wait_for(std::chrono::duration<double>(wait_sec)) != std::future_status::ready)
+    // Note: goal includes cartesian speed limiting fields, but that is typically handled
+    // by MoveIt's planning request adapter LimitMaxCartesianLinkSpeed.
+    // This server only retimes joint trajectories via TOTG.
+    if (goal->max_cartesian_speed > 0.0)
     {
-      RCLCPP_ERROR(get_logger(), "Planning service call timed out after %.2f sec", wait_sec);
-      result->motion_plan_response.error_code = makeError(moveit_msgs::msg::MoveItErrorCodes::TIMED_OUT);
-      goal_handle->abort(result);
-      return;
+      RCLCPP_WARN(get_logger(),
+                  "max_cartesian_speed>0 requested (link='%s', v=%.3f m/s) but this server does not implement "
+                  "cartesian speed limiting; ignoring.",
+                  goal->cartesian_speed_limited_link.c_str(),
+                  goal->max_cartesian_speed);
     }
 
-    auto srv_resp = future.get();
-    result->motion_plan_response = srv_resp->motion_plan_response;
-
-    if (result->motion_plan_response.error_code.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
+    GroupEntry group_entry;
+    std::string group_name;
     {
-      RCLCPP_WARN(get_logger(), "Planning failed with MoveItErrorCodes=%d",
-                  result->motion_plan_response.error_code.val);
-      goal_handle->abort(result);
-      return;
+      std::lock_guard<std::mutex> lk(groups_mutex_);
+      try
+      {
+        group_name = chooseGroupName(jt.joint_names);
+      }
+      catch (const std::exception& e)
+      {
+        RCLCPP_ERROR(get_logger(), "Failed to choose group: %s", e.what());
+        result->motion_plan_response.error_code =
+          makeError(moveit_msgs::msg::MoveItErrorCodes::INVALID_GROUP_NAME);
+        goal_handle->abort(result);
+        return;
+      }
+
+      auto it = groups_.find(group_name);
+      if (it == groups_.end())
+      {
+        RCLCPP_ERROR(get_logger(), "Internal error: chosen group '%s' not found in group map", group_name.c_str());
+        result->motion_plan_response.error_code =
+          makeError(moveit_msgs::msg::MoveItErrorCodes::INVALID_GROUP_NAME);
+        goal_handle->abort(result);
+        return;
+      }
+      group_entry = it->second;
     }
 
-    feedback->status = "Planning succeeded; applying TOTG time parametrization";
-    feedback->progress = 0.60f;
+    feedback->status = "Applying TOTG time parametrization";
+    feedback->progress = 0.2f;
     goal_handle->publish_feedback(feedback);
 
     if (goal_handle->is_canceling())
@@ -453,35 +474,38 @@ private:
       return;
     }
 
-    // Build RobotTrajectory from the response and apply TOTG
     try
     {
-      moveit::core::RobotState start_state(robot_model_);
-      moveit::core::robotStateMsgToRobotState(result->motion_plan_response.trajectory_start, start_state);
+      moveit::core::RobotState start_state = makeStartStateFromResponse(in_resp, in_traj);
 
       robot_trajectory::RobotTrajectory robot_traj(robot_model_, group_name);
-      robot_traj.setRobotTrajectoryMsg(start_state, result->motion_plan_response.trajectory);
+      robot_traj.setRobotTrajectoryMsg(start_state, in_traj);
 
-      const double vel_scale = sanitizeScalingFactor(goal->motion_plan_request.max_velocity_scaling_factor);
-      const double acc_scale = sanitizeScalingFactor(goal->motion_plan_request.max_acceleration_scaling_factor);
+      const double vel_scale = sanitizeScalingFactor(goal->max_velocity_scaling_factor);
+      const double acc_scale = sanitizeScalingFactor(goal->max_acceleration_scaling_factor);
 
       bool ok = false;
       if (group_entry.has_enforced_joint_limits)
       {
-        #ifdef MOVEIT_ROBOT_MODEL_LOADER_HPP_AVAILABLE
-        ok = group_entry.totg->computeTimeStamps(robot_traj, group_entry.enforced_joint_limits, vel_scale, acc_scale);
-        #else
+#ifdef MOVEIT_ROBOT_MODEL_LOADER_HPP_AVAILABLE
+        ok = group_entry.totg->computeTimeStamps(robot_traj,
+                                                 group_entry.enforced_joint_limits,
+                                                 vel_scale,
+                                                 acc_scale);
+#else
         ok = group_entry.totg->computeTimeStamps(robot_traj, vel_scale, acc_scale);
-        #endif
-      } else
+#endif
+      }
+      else
       {
         ok = group_entry.totg->computeTimeStamps(robot_traj, vel_scale, acc_scale);
       }
 
       if (!ok)
       {
-        RCLCPP_ERROR(get_logger(), "TOTG computeTimeStamps() failed for group '%s'", group_name.c_str());
-        result->motion_plan_response.error_code = makeError(moveit_msgs::msg::MoveItErrorCodes::FAILURE);
+        RCLCPP_ERROR(get_logger(), "TOTG computeTimeStamps() failed (group='%s')", group_name.c_str());
+        result->motion_plan_response.error_code =
+          makeError(moveit_msgs::msg::MoveItErrorCodes::FAILURE);
         goal_handle->abort(result);
         return;
       }
@@ -489,10 +513,18 @@ private:
       moveit_msgs::msg::RobotTrajectory timed_msg;
       robot_traj.getRobotTrajectoryMsg(timed_msg);
       result->motion_plan_response.trajectory = timed_msg;
-    } catch (const std::exception &ex)
+
+      // Keep trajectory_start consistent with the state used
+      moveit::core::robotStateToRobotStateMsg(start_state, result->motion_plan_response.trajectory_start);
+
+      result->motion_plan_response.error_code =
+        makeError(moveit_msgs::msg::MoveItErrorCodes::SUCCESS);
+    }
+    catch (const std::exception& ex)
     {
       RCLCPP_ERROR(get_logger(), "Exception during TOTG: %s", ex.what());
-      result->motion_plan_response.error_code = makeError(moveit_msgs::msg::MoveItErrorCodes::FAILURE);
+      result->motion_plan_response.error_code =
+        makeError(moveit_msgs::msg::MoveItErrorCodes::FAILURE);
       goal_handle->abort(result);
       return;
     }
@@ -505,64 +537,33 @@ private:
   }
 
 private:
-  /**
-   * @brief Safely get joint limits for a joint name from the local cache.
-   *
-   * This node keeps an internal override cache so it doesn't depend on the
-   * RobotModel exposing get/set joint-limits methods. The cache is used when
-   * enforced joint limits are provided via parameters or when the node sets
-   * defaults.
-   *
-   * @param joint_name name of the joint
-   * @return JointLimits message (default-constructed if not present)
-   */
-  moveit_msgs::msg::JointLimits getJointLimitsSafe(const std::string &joint_name) const
-  {
-    auto it = joint_limits_overrides_.find(joint_name);
-    if (it != joint_limits_overrides_.end())
-      return it->second;
-    return moveit_msgs::msg::JointLimits();
-  }
-
-  /**
-   * @brief Store joint limits into the local override cache.
-   * @param joint_name joint to update
-   * @param jl limits to store
-   */
-  void setJointLimitsSafe(const std::string &joint_name, const moveit_msgs::msg::JointLimits &jl)
-  {
-    joint_limits_overrides_[joint_name] = jl;
-  }
-
-private:
   std::shared_ptr<robot_model_loader::RobotModelLoader> robot_model_loader_;
   moveit::core::RobotModelPtr robot_model_;
 
-  rclcpp::Client<moveit_msgs::srv::GetMotionPlan>::SharedPtr plan_client_;
   rclcpp_action::Server<ActionT>::SharedPtr action_server_;
 
-  std::mutex groups_mutex_;
+  mutable std::mutex groups_mutex_;
   std::unordered_map<std::string, GroupEntry> groups_;
-
-  // Local cache for joint-limit overrides to avoid depending on RobotModel API
-  // methods that might not be available in the installed MoveIt version.
-  std::unordered_map<std::string, moveit_msgs::msg::JointLimits> joint_limits_overrides_;
 };
 
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
+
   rclcpp::executors::MultiThreadedExecutor exec;
   auto node = std::make_shared<ApplyTimeParametrizationServer>();
+
   if (!node->init())
   {
     RCLCPP_ERROR(node->get_logger(), "Failed to initialize ApplyTimeParametrizationServer");
     return 1;
   }
-  RCLCPP_INFO(node->get_logger(), "starting the server");
 
+  RCLCPP_INFO(node->get_logger(), "starting the server");
   exec.add_node(node);
   exec.spin();
+
   rclcpp::shutdown();
   return 0;
 }
+
