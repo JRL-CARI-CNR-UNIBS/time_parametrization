@@ -1,3 +1,11 @@
+/**
+ * @file time_parametrization_node.cpp
+ * @brief ROS 2 action server that retimes a MoveIt trajectory with Time-Optimal Trajectory Generation (TOTG).
+ *
+ * The node offers the action @c time_parametrization_msgs/action/ApplyTimeParametrization:
+ * it receives an unparametrized @c moveit_msgs/MotionPlanResponse, computes the time stamps,
+ * velocities and accelerations with MoveIt TOTG, and returns the retimed response.
+ */
 #include <algorithm>
 #include <chrono>
 #include <memory>
@@ -37,6 +45,11 @@
 
 namespace
 {
+/**
+ * @brief Clamp a velocity/acceleration scaling factor to its valid range.
+ * @param v Requested factor.
+ * @return @p v if it is in (0, 1], otherwise 1.0 (no scaling).
+ */
 double sanitizeScalingFactor(double v)
 {
   // Allowed values are in (0,1]. Treat anything else as "unspecified" => 1.0.
@@ -45,6 +58,11 @@ double sanitizeScalingFactor(double v)
   return v;
 }
 
+/**
+ * @brief Build a MoveIt error code message.
+ * @param code One of the moveit_msgs::msg::MoveItErrorCodes constants.
+ * @return The message.
+ */
 moveit_msgs::msg::MoveItErrorCodes makeError(int32_t code)
 {
   moveit_msgs::msg::MoveItErrorCodes e;
@@ -53,6 +71,16 @@ moveit_msgs::msg::MoveItErrorCodes makeError(int32_t code)
 }
 
 // Minimal YAML -> JointLimits parser
+/**
+ * @brief Parse a joint limit entry of the @c enforced_joint_limits list.
+ *
+ * Supported keys: @c joint_name (required), @c has_position_limits, @c min_position, @c max_position,
+ * @c has_velocity_limits, @c max_velocity, @c has_acceleration_limits, @c max_acceleration,
+ * @c has_jerk_limits, @c max_jerk. Missing flags default to false and missing values to 0.
+ * @param n YAML map.
+ * @return The joint limits.
+ * @throws std::runtime_error if @c joint_name is missing.
+ */
 moveit_msgs::msg::JointLimits parseJointLimits(const YAML::Node &n)
 {
   moveit_msgs::msg::JointLimits jl;
@@ -83,7 +111,7 @@ moveit_msgs::msg::JointLimits parseJointLimits(const YAML::Node &n)
 } // namespace
 
 /**
- * ApplyTimeParametrizationServer
+ * @brief Node offering the ApplyTimeParametrization action.
  *
  * Action goal contains:
  *   - moveit_msgs/MotionPlanResponse unparametrized_motion_plan_response
@@ -91,6 +119,7 @@ moveit_msgs::msg::JointLimits parseJointLimits(const YAML::Node &n)
  *   - optional cartesian speed limiting fields (NOT implemented here)
  *
  * The server retimes the input trajectory with MoveIt TOTG and returns a new MotionPlanResponse.
+ * Usage: create the node with std::make_shared, call init(), then spin it with a multi-threaded executor.
  */
 class ApplyTimeParametrizationServer : public rclcpp::Node
 {
@@ -98,6 +127,17 @@ public:
   using ActionT = time_parametrization_msgs::action::ApplyTimeParametrization;
   using GoalHandleT = rclcpp_action::ServerGoalHandle<ActionT>;
 
+  /**
+   * @brief Constructor. Declares the node parameters; init() must be called afterwards.
+   *
+   * Parameters:
+   * - @c action_name (string, default "apply_time_parametrization"): name of the action;
+   * - @c robot_description_param (string, default "robot_description"): parameter holding the URDF;
+   * - @c group_configs_yaml (string, default "[]"): YAML sequence with one entry per planning group
+   *   (see loadGroupConfigs());
+   * - @c default_group_name (string, default ""): if set, this group is always used.
+   * @param options Node options.
+   */
   ApplyTimeParametrizationServer(const rclcpp::NodeOptions &options = rclcpp::NodeOptions())
     : rclcpp::Node("apply_time_parametrization_server", options)
   {
@@ -111,6 +151,14 @@ public:
     declare_parameter<std::string>("default_group_name", "");
   }
 
+  /**
+   * @brief Load the robot model and the group configurations, then start the action server.
+   *
+   * It must be called after the node is owned by a shared pointer (it uses shared_from_this()).
+   * Joints without acceleration limits get a default limit of 5 times the velocity limit.
+   * @return True on success.
+   * @throws std::runtime_error if the robot model or the group configuration cannot be loaded.
+   */
   bool init()
   {
     RCLCPP_INFO(get_logger(), "Initializing ApplyTimeParametrizationServer");
@@ -181,15 +229,29 @@ public:
   }
 
 private:
+  /**
+   * @brief TOTG configuration of one planning group.
+   */
   struct GroupEntry
   {
-    std::string group_name;
-    std::shared_ptr<trajectory_processing::TimeOptimalTrajectoryGeneration> totg;
+    std::string group_name;  ///< MoveIt planning group name.
+    std::shared_ptr<trajectory_processing::TimeOptimalTrajectoryGeneration> totg;  ///< TOTG instance with the group settings.
 
-    bool has_enforced_joint_limits{false};
-    std::vector<moveit_msgs::msg::JointLimits> enforced_joint_limits;
+    bool has_enforced_joint_limits{false};  ///< True if enforced_joint_limits overrides the robot model limits.
+    std::vector<moveit_msgs::msg::JointLimits> enforced_joint_limits;  ///< Joint limits that override the robot model ones.
   };
 
+  /**
+   * @brief Parse the @c group_configs_yaml parameter.
+   *
+   * Each entry of the YAML sequence supports:
+   * - @c group_name (required): MoveIt planning group; entries of unknown groups are skipped;
+   * - @c path_tolerance (default 0.1): TOTG path tolerance;
+   * - @c resample_dt (default 0.1 s): TOTG resampling period;
+   * - @c min_angle_change (default 0.001): TOTG minimum angle change;
+   * - @c enforced_joint_limits (optional): list of joint limits, see parseJointLimits().
+   * @throws std::runtime_error if the YAML is not a sequence or an entry is malformed.
+   */
   void loadGroupConfigs()
   {
     std::lock_guard<std::mutex> lk(groups_mutex_);
@@ -249,6 +311,15 @@ private:
   // Build start state:
   // - prefer goal.unparametrized_motion_plan_response.trajectory_start if populated
   // - otherwise infer from first point of joint_trajectory
+  /**
+   * @brief Build the start robot state of the trajectory.
+   *
+   * Uses @c trajectory_start of the response if it is set, otherwise the first point of the joint
+   * trajectory (single-DOF joints only). Joints not in the trajectory keep their default value.
+   * @param resp Input motion plan response.
+   * @param traj_msg Input trajectory.
+   * @return Start state.
+   */
   moveit::core::RobotState makeStartStateFromResponse(
     const moveit_msgs::msg::MotionPlanResponse& resp,
     const moveit_msgs::msg::RobotTrajectory& traj_msg) const
@@ -301,6 +372,13 @@ private:
   // - if default_group_name param is non-empty => use it
   // - else, if only one configured group => use it
   // - else, pick the unique group whose variable names contain all trajectory joint_names
+  /**
+   * @brief Select the planning group used to retime a trajectory.
+   * @param traj_joint_names Joint names of the trajectory.
+   * @return The @c default_group_name parameter if set; otherwise the only configured group;
+   * otherwise the unique configured group containing all the trajectory joints.
+   * @throws std::runtime_error if no group or more than one group matches.
+   */
   std::string chooseGroupName(const std::vector<std::string>& traj_joint_names) const
   {
     const std::string forced = get_parameter("default_group_name").as_string();
@@ -347,6 +425,10 @@ private:
                              "Set parameter 'default_group_name'.");
   }
 
+  /**
+   * @brief Accept a goal if the trajectory is not empty and a group can be selected.
+   * @return ACCEPT_AND_EXECUTE or REJECT.
+   */
   rclcpp_action::GoalResponse handleGoal(const rclcpp_action::GoalUUID&,
                                          std::shared_ptr<const ActionT::Goal> goal)
   {
@@ -380,16 +462,31 @@ private:
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
   }
 
+  /**
+   * @brief Cancellation is always accepted; it is checked between the execution steps.
+   */
   rclcpp_action::CancelResponse handleCancel(const std::shared_ptr<GoalHandleT> /*goal_handle*/)
   {
     return rclcpp_action::CancelResponse::ACCEPT;
   }
 
+  /**
+   * @brief Run execute() in a detached thread.
+   */
   void handleAccepted(const std::shared_ptr<GoalHandleT> goal_handle)
   {
     std::thread{std::bind(&ApplyTimeParametrizationServer::execute, this, goal_handle)}.detach();
   }
 
+  /**
+   * @brief Retime the trajectory of the goal.
+   *
+   * The result is a copy of the input response where @c trajectory, @c trajectory_start and
+   * @c error_code are replaced. Cartesian speed limits in the goal are ignored (a warning is printed).
+   * Error codes: INVALID_MOTION_PLAN (empty trajectory), INVALID_GROUP_NAME (no group selected),
+   * FAILURE (TOTG failed), SUCCESS.
+   * @param goal_handle Goal handle.
+   */
   void execute(const std::shared_ptr<GoalHandleT> goal_handle)
   {
     auto feedback = std::make_shared<ActionT::Feedback>();
@@ -537,15 +634,18 @@ private:
   }
 
 private:
-  std::shared_ptr<robot_model_loader::RobotModelLoader> robot_model_loader_;
-  moveit::core::RobotModelPtr robot_model_;
+  std::shared_ptr<robot_model_loader::RobotModelLoader> robot_model_loader_;  ///< Robot model loader.
+  moveit::core::RobotModelPtr robot_model_;  ///< Robot model.
 
-  rclcpp_action::Server<ActionT>::SharedPtr action_server_;
+  rclcpp_action::Server<ActionT>::SharedPtr action_server_;  ///< Action server.
 
-  mutable std::mutex groups_mutex_;
-  std::unordered_map<std::string, GroupEntry> groups_;
+  mutable std::mutex groups_mutex_;  ///< Protects groups_.
+  std::unordered_map<std::string, GroupEntry> groups_;  ///< Group configurations, by group name.
 };
 
+/**
+ * @brief Start the node with a multi-threaded executor.
+ */
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);

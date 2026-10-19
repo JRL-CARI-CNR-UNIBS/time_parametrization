@@ -6,3 +6,6 @@ kdev4/
 *.autosave*
 *.idea
 
+
+# Doxygen output
+doxygen/

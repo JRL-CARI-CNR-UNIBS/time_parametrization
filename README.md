@@ -1,170 +1,163 @@
-# time_parametrization (ROS 2 Jazzy)
+# time_parametrization
 
-Action server that applies MoveIt 2 **Time-Optimal Trajectory Generation (TOTG)** time parametrization to a planned trajectory.
+ROS 2 action server that retimes a MoveIt trajectory with **Time-Optimal Trajectory Generation (TOTG)**.
 
-This package exposes an action, **`time_parametrization_msgs/action/ApplyTimeParametrization`**, which:
-1. Accepts a `moveit_msgs/MotionPlanRequest` (the same request you would send to MoveIt for planning),
-2. Calls a MoveIt planning service (default: `/plan_kinematic_path`),
-3. Applies TOTG to the returned trajectory (optionally with enforced joint limits),
-4. Returns the updated `moveit_msgs/MotionPlanResponse`.
+You give it a path (a `moveit_msgs/MotionPlanResponse` whose trajectory has positions but no timing); it
+computes time stamps, velocities and accelerations that respect the joint limits, and returns the same
+response with the retimed trajectory.
 
-## What you get
+Typical use: plan a joint path with a planner that does not produce timing (for example a `graph_core`
+planner), retime it here, then execute it with MoveIt or `ros2_control`.
 
-- Per-group TOTG configuration (different `resample_dt`, tolerances, etc. per planning group).
-- Optional per-group **enforced joint limits** overriding the robot defaults.
-- Simple integration point for “plan + retime” pipelines without modifying MoveIt internals.
+## Features
 
-## Interfaces
+- MoveIt 2 TOTG (`trajectory_processing::TimeOptimalTrajectoryGeneration`).
+- Per-group TOTG settings (`resample_dt`, `path_tolerance`, `min_angle_change`).
+- Optional per-group **enforced joint limits** that override the limits of the robot model.
+- Velocity and acceleration scaling factors per request.
+- Joints without acceleration limits get a default limit of 5 × velocity limit.
+- Works with ROS 2 Humble (MoveIt `.h` headers) and Jazzy (MoveIt `.hpp` headers).
 
-### Action
+## Repository layout
 
-**Name (default):** `apply_time_parametrization`  
-**Type:** `time_parametrization_msgs/action/ApplyTimeParametrization`
+| Path | Content |
+|---|---|
+| `time_parametrization/src/time_parametrization_node.cpp` | the action server (`apply_time_parametrization_server`) |
+| `time_parametrization/config/example_config.yaml` | example parameter file |
+| `time_parametrization/launch/apply_time_parametrization_server.launch.py` | launch file |
+| `docs/TUTORIAL.md` | step-by-step tutorial |
 
-#### Goal
-- `moveit_msgs/MotionPlanRequest motion_plan_request`
-
-#### Result
-- `moveit_msgs/MotionPlanResponse motion_plan_response`
-
-#### Feedback
-- `string status`
-- `float32 progress`
-
-## How it works
-
-1. The server receives a `MotionPlanRequest`.
-2. It checks that `motion_plan_request.group_name` is configured/managed.
-3. It reads `motion_plan_request.max_velocity_scaling_factor` and `motion_plan_request.max_acceleration_scaling_factor`.
-4. It calls the configured MoveIt planning service (default: `/plan_kinematic_path`, type `moveit_msgs/srv/GetMotionPlan`).
-5. If planning succeeds, it builds a `robot_trajectory::RobotTrajectory` and runs:
-
-- `trajectory_processing::TimeOptimalTrajectoryGeneration::computeTimeStamps(trajectory, vel_scale, acc_scale)`, or
-- `...computeTimeStamps(trajectory, enforced_joint_limits, vel_scale, acc_scale)` if limits are provided.
-
-6. The server returns the same `MotionPlanResponse`, but with the `trajectory` retimed.
+The action definition is in the separate package `time_parametrization_msgs`.
 
 ## Dependencies
 
-At minimum:
-- ROS 2 Jazzy
+- ROS 2 Humble or Jazzy
 - MoveIt 2 (`moveit_core`, `moveit_ros_planning`, `moveit_msgs`)
-- `rclcpp`, `rclcpp_action`
-- `yaml-cpp`
+- `rclcpp`, `rclcpp_action`, `yaml-cpp`
 - `time_parametrization_msgs`
 
 ## Build
 
-From your workspace root:
-
 ```bash
-colcon build --symlink-install
+cd ~/ros2_ws/src
+git clone https://github.com/JRL-CARI-CNR-UNIBS/time_parametrization.git
+# time_parametrization_msgs must be in the workspace too
+cd ~/ros2_ws
+colcon build --packages-up-to time_parametrization
 source install/setup.bash
 ```
 
-## Configuration
+## Action interface
 
-The server loads a list of group entries from either:
-- `group_configs_file` (absolute path to YAML), or
-- `group_configs_yaml` (inline YAML string; mainly for quick tests)
+**Default name:** `apply_time_parametrization` (parameter `action_name`)
+**Type:** `time_parametrization_msgs/action/ApplyTimeParametrization`
 
-Because ROS parameters do not natively support “list of maps”, the preferred approach is `group_configs_file` via the provided launch file.
+| Part | Field | Description |
+|---|---|---|
+| Goal | `moveit_msgs/MotionPlanResponse unparametrized_motion_plan_response` | trajectory to retime; only positions are needed |
+| Goal | `float64 max_velocity_scaling_factor` | in (0, 1]; any other value (also 0) means 1.0 |
+| Goal | `float64 max_acceleration_scaling_factor` | in (0, 1]; any other value (also 0) means 1.0 |
+| Goal | `string cartesian_speed_limited_link`, `float64 max_cartesian_speed` | **not implemented**: ignored with a warning |
+| Result | `moveit_msgs/MotionPlanResponse motion_plan_response` | copy of the input with retimed `trajectory`, `trajectory_start` and `error_code` |
+| Feedback | `string status`, `float32 progress` | progress of the request |
 
-### YAML schema
+The result `error_code` is:
 
-Top-level must be a YAML **sequence**. Each entry supports:
+- `SUCCESS` when the trajectory was retimed;
+- `INVALID_MOTION_PLAN` when the trajectory is empty;
+- `INVALID_GROUP_NAME` when no planning group can be selected;
+- `FAILURE` when TOTG fails.
 
-- `group_name` (string, required)
-- `resample_dt` (double, optional; seconds)
-- `path_tolerance` (double, optional)
-- `min_angle_change` (double, optional)
-- `enforced_joint_limits` (optional sequence of joint limit objects)
+### How the start state is chosen
 
-Example:
+If `trajectory_start` of the input response is filled, it is used as the start state. Otherwise the
+first trajectory point is used (single-DOF joints only). The first trajectory point should be the current
+robot configuration, otherwise MoveIt will refuse to execute the trajectory.
 
-```yaml
-- group_name: "arm1"
-  resample_dt: 0.001
-  path_tolerance: 0.001
-  min_angle_change: 0.001
-  enforced_joint_limits:
-    - joint_name: "joint_1"
-      has_velocity_limits: true
-      max_velocity: 1.0
-      has_acceleration_limits: true
-      max_acceleration: 2.0
-    - joint_name: "joint_2"
-      has_velocity_limits: true
-      max_velocity: 1.2
-      has_acceleration_limits: true
-      max_acceleration: 2.5
+### How the planning group is chosen
 
-- group_name: "arm2"
-  resample_dt: 0.002
-  path_tolerance: 0.002
-  min_angle_change: 0.001
-```
+1. If the `default_group_name` parameter is set, that group is used.
+2. Otherwise, if only one group is configured, that group is used.
+3. Otherwise, the server uses the only configured group that contains all the joints of the trajectory.
+   If none or more than one group matches, the goal is rejected.
 
-#### Supported `moveit_msgs/JointLimits` fields (Jazzy)
-
-The YAML joint limit objects may contain:
-
-- `joint_name` (required)
-- `has_position_limits`, `min_position`, `max_position`
-- `has_velocity_limits`, `max_velocity`
-- `has_acceleration_limits`, `max_acceleration`
-- `has_jerk_limits`, `max_jerk`
-
-Note: `angle_wraparound` is not present in `moveit_msgs/JointLimits` on Jazzy.
+Note: the `group_name` field of the input response is **not** used.
 
 ## Node parameters
 
-Common parameters (names as used in the reference implementation):
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `action_name` | string | `apply_time_parametrization` | action name |
+| `robot_description_param` | string | `robot_description` | parameter that contains the URDF |
+| `group_configs_yaml` | string | `"[]"` | YAML sequence with the group configurations (see below) |
+| `default_group_name` | string | `""` | if set, always use this group |
 
-- `action_name` (string, default: `apply_time_parametrization`)
-- `planning_service` (string, default: `/plan_kinematic_path`)
-- `planning_service_wait_sec` (double, default: `2.0`)
-- `robot_description_param` (string, default: `robot_description`)
-- `group_configs_file` (string, default: empty)
-- `group_configs_yaml` (string, default: `"[]"`)
+ROS 2 parameters cannot be a list of maps, so the group configuration is a **YAML string**:
+
+```yaml
+apply_time_parametrization_server:
+  ros__parameters:
+    action_name: apply_time_parametrization
+    robot_description_param: robot_description
+    group_configs_yaml: |
+      - group_name: "manipulator"
+        resample_dt: 0.001        # [s], default 0.1
+        path_tolerance: 0.001     # default 0.1
+        min_angle_change: 0.001   # default 0.001
+        enforced_joint_limits:    # optional
+          - joint_name: "shoulder_pan_joint"
+            has_velocity_limits: true
+            max_velocity: 1.0
+            has_acceleration_limits: true
+            max_acceleration: 2.0
+```
+
+Groups that are not in the robot model are skipped with a warning.
+
+Supported keys of a joint limit entry (`moveit_msgs/JointLimits`): `joint_name` (required),
+`has_position_limits`, `min_position`, `max_position`, `has_velocity_limits`, `max_velocity`,
+`has_acceleration_limits`, `max_acceleration`, `has_jerk_limits`, `max_jerk`.
 
 ## Launch
 
-A convenience launch file is provided that lets you specify the config by **package name** and **relative file path** inside that package’s share directory.
-
-Example:
-
 ```bash
-ros2 launch time_parametrization apply_time_parametrization.launch.py \
+ros2 launch time_parametrization apply_time_parametrization_server.launch.py \
   config_pkg:=time_parametrization \
-  config_file:=config/group_configs.yaml
+  config_file:=config/example_config.yaml
 ```
 
-- `config_pkg`: the package containing the YAML in its `share/<pkg>/...`
-- `config_file`: path relative to the package share directory (e.g., `config/group_configs.yaml`)
+- `config_pkg`: package whose `share/` folder contains the parameter file;
+- `config_file`: path of the parameter file, relative to that folder.
+
+The node must also receive the robot description (by default the `robot_description` parameter), for
+example by launching it next to `move_group` with the same parameters.
 
 ## Using the action
 
-This action is easiest to call from a client node that already constructs a `moveit_msgs/MotionPlanRequest`
-(start state, goal constraints, etc.). The returned `MotionPlanResponse` contains the retimed `trajectory`.
-
-If you want a CLI test with `ros2 action send_goal`, be aware that `MotionPlanRequest` is verbose; in practice,
-a small Python/C++ client is more convenient.
+See [docs/TUTORIAL.md](docs/TUTORIAL.md) for a complete Python client.
+`surface_path_planning/scripts/send_raster_to_joint_path.py` is another example of a client.
 
 ## Troubleshooting
 
-- **Goal rejected (group not managed):** Ensure your YAML contains an entry for `motion_plan_request.group_name`
-  and the group exists in the robot model.
-- **Planning service unavailable:** Ensure MoveIt’s planning service is running (typically from `move_group`) and
-  the `planning_service` parameter matches the correct name.
-- **TOTG failed:** Often caused by invalid limits/scaling factors, inconsistent joint limits, or pathological paths.
-  Try removing enforced limits, setting scaling factors to 1.0, or increasing `path_tolerance`.
+- **Goal rejected**: the trajectory is empty, or no group matches its joints. Check the server log and the
+  `group_configs_yaml` / `default_group_name` parameters.
+- **TOTG failed**: often caused by inconsistent limits, a scaling factor that is too small, or duplicated
+  consecutive points. Try without enforced limits, with scaling factors 1.0, or with a larger `path_tolerance`.
+- **Very slow trajectory**: the scaling factors are applied on top of the joint limits; check that the robot
+  model has realistic velocity/acceleration limits.
 
-## Notes / design constraints
+## API documentation
 
-- The action goal contains only a `MotionPlanRequest`, not a trajectory. Therefore, the server must either:
-   - perform planning itself, or
-   - call a planning service and retime the result (this package uses that approach by default).
+The API reference of the classes and functions is in [docs/API.md](docs/API.md) (generated from the
+Doxygen comments).
 
-If you want a pure “retime this trajectory” API, consider extending the action goal to include
-a `moveit_msgs/RobotTrajectory` or a full `MotionPlanResponse`.
+To browse it as HTML, run Doxygen from the repository folder:
+
+```bash
+doxygen Doxyfile
+xdg-open doxygen/html/index.html
+```
+
+## License
+
+BSD 3-Clause, see [LICENSE](LICENSE).

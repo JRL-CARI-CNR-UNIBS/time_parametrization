@@ -1,0 +1,28 @@
+# Doxygen configuration. Generate the documentation with:
+#   doxygen Doxyfile
+# and open doxygen/html/index.html
+
+PROJECT_NAME           = "time_parametrization"
+PROJECT_BRIEF          = "TOTG time parametrization action server for MoveIt trajectories"
+OUTPUT_DIRECTORY       = doxygen
+
+INPUT                  = README.md docs time_parametrization/src/time_parametrization_node.cpp
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h *.hpp *.cpp *.md
+EXCLUDE_PATTERNS       = */build/* */install/* */log/* */doxygen/* */.git/* */docs/API.md
+USE_MDFILE_AS_MAINPAGE = README.md
+MARKDOWN_SUPPORT       = YES
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+JAVADOC_AUTOBRIEF      = YES
+SOURCE_BROWSER         = YES
+BUILTIN_STL_SUPPORT    = YES
+WARN_IF_UNDOCUMENTED   = YES
+QUIET                  = YES
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+HAVE_DOT               = NO
